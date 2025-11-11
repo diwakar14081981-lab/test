@@ -1,0 +1,289 @@
+1. OVERALL ARCHITECTURE PATTERN
+
+This is a Layered/N-Tier Architecture built on Spring Boot 3.4.5 following Service-Oriented Architecture (SOA) principles with integration to external SOAP web services.
+
+Architecture Style: Hybrid Integration Layer + Domain-Driven Design
+
+2. ARCHITECTURAL LAYERS
+
+Layer 1: Presentation/Controller Layer
+
+Location: ClaimSubmissionRestController.java
+Purpose: REST API endpoints for claim operations
+Endpoints:
+POST /api/clm/uhcdental-rt/claim-submissions/v1 - Submit new claim
+PUT /api/clm/uhcdental-rt/claim-submissions/v1/prices - Process claim pricing
+PUT /api/clm/uhcdental-rt/claim-submissions/v1/{claimId} - Update existing claim
+Responsibilities: Request routing, HTTP status management, delegation to service layer
+Layer 2: Service Layer (Business Logic)
+
+Two levels of service abstraction:
+
+a) Facade Service:
+
+DentalFacetsService (Interface) / DentalFacetsServiceImpl
+Acts as a thin facade delegating to the broker engine
+b) Integration Broker Engine:
+
+ClaimSubmissionBrokerEngine (Interface) / ClaimSubmissionBrokerEngineImpl
+Core responsibilities:
+SOAP web service client integration (Trizetto FXI)
+Data transformation (API → SOAP, SOAP → API)
+Database enrichment (procedure codes, disallow explanations)
+Three operation types: Submit, Process, Update
+Layer 3: Data Access Layer
+
+JPA Repositories:
+DisallowExplanationRepo - Fetches explanation codes from CMC_EXCD_EXPL_CD
+ProcedureCodeRepo - Fetches procedure descriptions from CMC_DPDS_DESC
+Technology: Spring Data JPA with MS SQL Server
+Pattern: Repository pattern with custom native queries
+Layer 4: Domain Layer
+
+Domain Objects: DisallowExplanation, ProcedureCode
+DTOs/Schema Objects: Generated from XSD schemas
+ClaimSubmissionRequest, ClaimSubmissionResponse
+Enterprise schema objects under com.unitedhealthgroup.enterprise.schema.api
+Utility Objects: ApiError, ApiErrorResponse
+3. INTEGRATION ARCHITECTURE
+
+External System Integration:
+
+SOAP Web Services (Trizetto Facets FXI):
+
+ClaimSubmission_v20 - Initial claim submission
+Endpoint: FaWsvcInpClaimSubmission_v20.asmx
+ClaimProcess_v20 - Claim processing/pricing
+Endpoint: FaWsvcInpClaimProcess_v20.asmx
+ClaimUpdate_v15 - Claim updates
+Endpoint: FaWsvcInpClaimUpdate_v15.asmx
+Integration Pattern: Adapter/Wrapper Pattern
+
+Transforms REST JSON → SOAP XML
+Uses JAX-WS for SOAP client
+Custom header handlers (MyHeaderHandler)
+SSL/TLS configuration with custom truststore
+4. DATA TRANSFORMATION LAYER
+
+Mapper Pattern (DAO-style Mappers):
+
+ClaimSubmissionMapperDao - Handles submission mapping
+ClaimProcessMapperDao - Handles process mapping
+ClaimUpdateMapperDao - Handles update mapping
+Transformation Flow:
+
+ 
+ 
+ 
+ 
+Post-processing Enhancement:
+
+After SOAP response, enriches data with:
+Procedure code descriptions from database
+Disallow explanation descriptions from database
+5. CROSS-CUTTING CONCERNS
+
+A. Validation Layer
+
+RequestValidator - Comprehensive input validation
+Required field validation
+Format validation (dates, amounts)
+Business rule validation (amount summation, duplicate line sequences)
+Character length constraints
+Negative amount checks
+B. Exception Handling
+
+GlobalExceptionHandler - Centralized exception handling using @ControllerAdvice
+Custom exceptions:
+BadRequestException (400)
+ApplicationException (500)
+BackendException, EmptyResponseException
+Standardized error response format (ApiErrorResponse)
+C. Logging & Observability
+
+LoggingService / LoggingServiceImpl
+Multiple interceptors:
+CustomGetRequestHandlerInterceptor
+CustomRequestBodyAdviceAdapter
+CustomResponseBodyAdviceAdapter
+RestTemplateLoggingInterceptor
+Splunk Integration - Centralized log aggregation
+Traces: HTTP requests/responses, SOAP calls, database queries
+D. Security
+
+Stargate JWT Filter - Token-based authentication
+SSL/TLS - Mutual TLS for SOAP services
+Custom truststore configuration
+Security context with limited capabilities (K8s)
+E. Health Monitoring
+
+HealthCheckFilter - Custom /health endpoint
+Kubernetes probes configured (startup, readiness, liveness)
+6. CONFIGURATION MANAGEMENT
+
+Profiles & Environment Config:
+
+application.yml - Spring Boot configuration
+Environment-specific properties:
+Database connection (HikariCP pool)
+SOAP endpoints (Facets)
+Splunk logging
+SSL truststore paths
+Dependency Injection:
+
+Spring Boot @Configuration classes
+Bean definitions in ApplicationConfig
+Constructor-based injection throughout
+7. DEPLOYMENT ARCHITECTURE
+
+Containerization:
+
+Docker - OpenJDK 17 base image
+Kubernetes deployment with:
+Service (ClusterIP)
+Deployment with resource limits
+Health probes
+PersistentVolumeClaim for /ebiz mount
+Security context (non-root user, capability dropping)
+Build & CI/CD:
+
+Maven - Build tool with multiple plugins:
+Spring Boot plugin
+JaCoCo (code coverage)
+Assembly plugin
+Jenkins - Pipeline configuration (Jenkinsfile, JenkinsConfig.yml)
+Artifactory - Artifact repository (UHG internal)
+8. KEY DESIGN PATTERNS IDENTIFIED
+
+Layered Architecture - Clear separation of concerns
+Repository Pattern - Data access abstraction
+Facade Pattern - DentalFacetsService simplifies interface
+Adapter Pattern - SOAP integration adapters
+Strategy Pattern - Different mappers for different operations
+Chain of Responsibility - Filter chain for requests
+Dependency Injection - Spring IoC container
+DTO Pattern - Separate request/response objects
+Builder Pattern - Lombok @Builder for domain objects
+9. DATA FLOW DIAGRAM
+
+ 
+
+Client (REST)
+
+    ↓
+
+HealthCheckFilter (if /health)
+
+    ↓
+
+Stargate JWT Filter (Authentication)
+
+    ↓
+
+ClaimSubmissionRestController
+
+    ↓
+
+RequestValidator (Validation)
+
+    ↓
+
+DentalFacetsServiceImpl (Facade)
+
+    ↓
+
+ClaimSubmissionBrokerEngineImpl
+
+    ↓
+
+├─→ ClaimSubmissionMapperDao (Transform to FXI)
+
+├─→ SOAP Client (Trizetto Facets - 3 endpoints)
+
+├─→ ClaimSubmissionMapperDao (Transform from FXI)
+
+└─→ Repositories (Enrich with DB data)
+
+    ├─→ DisallowExplanationRepo
+
+    └─→ ProcedureCodeRepo
+
+    ↓
+
+ClaimSubmissionResponse
+
+    ↓
+
+Response Logging Interceptor
+
+    ↓
+
+Client (JSON Response)
+
+10. TECHNOLOGY STACK
+
+Layer
+
+Technology
+
+Framework
+
+Spring Boot 3.4.5 (Java 17)
+
+Web
+
+Spring MVC (REST)
+
+Persistence
+
+Spring Data JPA, Hibernate
+
+Database
+
+Microsoft SQL Server
+
+Connection Pool
+
+HikariCP
+
+SOAP Client
+
+JAX-WS (Jakarta XML Web Services)
+
+Security
+
+Stargate JWT Filter, SSL/TLS
+
+Logging
+
+Logback, SLF4J, Splunk
+
+Utilities
+
+Lombok, Apache Commons, Joda-Time
+
+Testing
+
+JUnit 4, Mockito
+
+Build
+
+Maven
+
+Container
+
+Docker, Kubernetes
+
+Monitoring
+
+Health checks, Kubernetes probes
+
+11. STRENGTHS OF THIS ARCHITECTURE
+
+✅ Clear separation of concerns ✅ Testable design (interfaces, DI) ✅ Comprehensive validation and error handling ✅ Extensive logging and observability ✅ Secure by design (authentication, SSL, K8s hardening) ✅ Scalable (stateless, containerized) ✅ Maintainable (layered, well-organized packages)
+
+12. POTENTIAL AREAS FOR IMPROVEMENT
+
+⚠️ Mapper classes are procedural - Could benefit from MapStruct or similar ⚠️ Large validator class - Could be split into smaller, focused validators ⚠️ Direct SOAP client instantiation - Could use Spring's @WebServiceClient ⚠️ Mixed concerns in BrokerEngine - Mapping, calling, and enrichment in one class ⚠️ Limited async processing - All operations are synchronous ⚠️ Test coverage exclusions - Large portions excluded from Sonar analysis
+
+This is a well-structured enterprise integration API following industry best practices for healthcare claim processing systems. The architecture prioritizes reliability, security, and maintainability while integrating with legacy SOAP-based systems.
